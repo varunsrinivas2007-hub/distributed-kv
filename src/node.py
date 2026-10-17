@@ -15,6 +15,8 @@ class Node:
         self.followers = config["followers"]
         self.store = KVStore()
 
+        self.pending_replication = {follower_id: [] for follower_id in self.followers}
+
     def start(self):
         self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server.bind((self.host, self.port))
@@ -52,18 +54,37 @@ class Node:
     def replicate(self, message):
         for follower_id in self.followers:
             follower_config = nodes[follower_id]
+            pending = self.pending_replication[follower_id]
 
-            try:
-                response = send_to_node(
-                    follower_config["host"],
-                    follower_config["port"],
-                    message,
-                )
+            # Add the new write to this follower's pending queue.
+            pending.append(message)
 
-                print(f"Replication to Node {follower_id}: {response}")
+            # Attempt pending writes in their original order.
+            while pending:
+                current_message = pending[0]
 
-            except (OSError, TimeoutError) as error:
-                print(f"Replication to Node {follower_id} failed: {error}")
+                try:
+                    response = send_to_node(
+                        follower_config["host"],
+                        follower_config["port"],
+                        current_message,
+                    )
+
+                    if response != "OK":
+                        print(
+                            f"Replication to Node {follower_id} "
+                            f"returned unexpected response: {response}"
+                        )
+                        break
+
+                    # Remove the write only after receiving OK.
+                    pending.pop(0)
+
+                    print(f"Replication to Node {follower_id}: " f"{response}")
+
+                except (OSError, TimeoutError) as error:
+                    print(f"Replication to Node {follower_id} failed: {error}")
+                    break
 
 
 if len(sys.argv) != 2:
